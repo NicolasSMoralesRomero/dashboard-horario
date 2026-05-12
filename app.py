@@ -1,7 +1,9 @@
 import streamlit as st
 import pandas as pd
-from streamlit_gsheets import GSheetsConnection
-from datetime import datetime, time
+import gspread
+from google.oauth2.service_account import Credentials
+import datetime
+import pytz
 import re
 
 # Configuración de página
