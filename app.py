@@ -35,43 +35,36 @@ def load_wfm_data(sheet_url):
     if len(all_values) < 3:
         return pd.DataFrame()
 
-    # Mapear en qué columna está cada día (Leyendo la Fila 2, índice 1)
-    # Buscamos patrones como "01-05", "02-05" a partir de la Columna D (índice 3)
+    # Mapear fechas
     dates_mapping = {}
     fila_fechas = all_values[1] 
     for col_idx in range(3, len(fila_fechas)):
         val = str(fila_fechas[col_idx]).strip()
         if re.match(r'\d{2}-\d{2}', val):
-            dia = int(val.split('-')[0]) # Extrae el '01' y lo convierte a 1
+            dia = int(val.split('-')[0])
             dates_mapping[col_idx] = dia
             
     parsed_data = []
-    turno_actual_memoria = "" # Para manejar las celdas combinadas de la Columna B
+    turno_actual_memoria = ""
     
-    # Iterar desde la fila 3 (índice 2) en adelante
     for row_idx in range(2, len(all_values)):
         row = all_values[row_idx]
-        
-        # Ignorar filas demasiado cortas
         if len(row) < 3:
             continue
             
         col_b_turno = str(row[1]).strip()
-        col_c_agente = str(row[2]).strip()
+        col_c_agente_base = str(row[2]).strip()
         
-        # Si la celda de turno tiene texto (ej. "de 9 a 16"), actualizamos la memoria.
-        # Si está vacía (por celda combinada), usamos el que quedó guardado.
         if "a" in col_b_turno and re.search(r'\d+', col_b_turno):
             turno_actual_memoria = col_b_turno
             
-        # Ignorar filas de encabezados intermedios, vacías, o filas de totales
-        if not col_c_agente or col_c_agente.isdigit() or col_c_agente.lower() in ["viernes", "sabado", "domingo", "lunes", "martes", "miercoles", "jueves"]:
+        # Ignoramos solo las filas que son claramente encabezados de días
+        if col_c_agente_base.lower() in ["viernes", "sabado", "domingo", "lunes", "martes", "miercoles", "jueves", "agente"]:
             continue
             
         if not turno_actual_memoria:
             continue
             
-        # Extraer las horas (Ej: de "de 14 a 21" extrae 14 y 21)
         match = re.search(r'(\d+)\s*a\s*(\d+)', turno_actual_memoria.lower())
         if not match:
             continue
@@ -82,22 +75,18 @@ def load_wfm_data(sheet_url):
         
         agente_data = {
             "Turno": turno_actual_memoria,
-            "Agente": col_c_agente,
+            "Agente_Base": col_c_agente_base,
             "Hora_Inicio": hora_inicio,
             "Hora_Fin": hora_fin,
             "Cruza_Medianoche": cruza_medianoche
         }
         
-        # Buscar la asistencia en las columnas mapeadas
+        # AHORA GUARDAMOS EL TEXTO EXACTO DE LA CELDA, NO UN TRUE/FALSE
         for col_idx, day_num in dates_mapping.items():
             if col_idx < len(row):
-                celda_valor = str(row[col_idx]).strip()
-                # Condición: si hay texto largo (el nombre) o colores, asume que trabaja.
-                # "f" o celdas vacías indican franco.
-                trabaja = len(celda_valor) > 1 and celda_valor.lower() != "f"
-                agente_data[f"Dia_{day_num}"] = trabaja
+                agente_data[f"Dia_{day_num}"] = str(row[col_idx]).strip()
             else:
-                agente_data[f"Dia_{day_num}"] = False
+                agente_data[f"Dia_{day_num}"] = ""
                 
         parsed_data.append(agente_data)
         
@@ -135,7 +124,6 @@ def main():
         st.info("No se pudieron cargar datos. Verifica el formato del Sheet.")
         st.stop()
 
-    # --- SIDEBAR ---
     st.sidebar.header("Filtros")
     fecha_hoy = datetime.datetime.now(TZ).date()
     fecha_seleccionada = st.sidebar.date_input("Seleccionar Fecha", fecha_hoy)
@@ -146,10 +134,17 @@ def main():
         st.sidebar.warning(f"No hay datos cargados para el día {dia_seleccionado} en este mes.")
         return
 
-    # Filtrar dotación del día
-    df_dia = df[df[col_dia] == True].copy()
+    # --- EL GRAN TRUCO WFM ---
+    # 1. Filtramos las filas donde la celda del día tenga más de 1 letra y no sea un franco o licencia.
+    df_dia = df[
+        (df[col_dia].astype(str).str.len() > 1) & 
+        (~df[col_dia].astype(str).str.lower().isin(['f', 'franco', 'vac', 'vacaciones', 'licencia', 'ausente']))
+    ].copy()
 
-    # --- TIEMPO ACTUAL ---
+    # 2. Reemplazamos el "Agente Base" por el nombre real que está escrito en la celda de ese día.
+    # Así capturamos horas extras, coberturas y dobles turnos a la perfección.
+    df_dia['Agente'] = df_dia[col_dia]
+
     ahora = datetime.datetime.now(TZ)
     hora_actual = ahora.hour
     
@@ -165,7 +160,6 @@ def main():
         df_dia.at[idx, 'En_Turno'] = en_turno
         df_dia.at[idx, 'Proximo'] = proximo
 
-    # --- SECCIONES ---
     col1, col2 = st.columns(2)
     
     with col1:
