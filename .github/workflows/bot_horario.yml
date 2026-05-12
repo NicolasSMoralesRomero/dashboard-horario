@@ -8,11 +8,12 @@ jobs:
   run-bot:
     runs-on: ubuntu-latest
     steps:
+steps:
       - name: Checkout del código
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4  # <-- Cambiado de v3 a v4
 
       - name: Configurar Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5  # <-- Cambiado de v4 a v5
         with:
           python-version: '3.11'
 
