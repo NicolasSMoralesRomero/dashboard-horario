@@ -21,7 +21,7 @@ def notify_slack(agentes, turno_prox, webhook):
     if not agentes: return
     nombres = ", ".join(agentes)
     mensaje = {
-        "text": f"⚠️ *ALERTA DE INGRESO (Próximos 5 min)*\nEn breve ingresan para el turno *{turno_prox}*:\n👥 {nombres}\nFavor validar conexión."
+        "text": f"⚠️ *ALERTA DE INGRESO (Próximos minutos)*\nEstán por ingresar para el turno *{turno_prox}*:\n👥 {nombres}\nFavor validar conexión."
     }
     requests.post(webhook, json=mensaje)
 
@@ -33,18 +33,23 @@ def run_bot():
     sheet = client.open_by_url(url).worksheet("Calendario")
     all_values = sheet.get_all_values()
 
+    # Mapear fechas
     dates_mapping = {}
     for col_idx, val in enumerate(all_values[1]):
         if re.match(r'\d{2}-\d{2}', str(val)):
             dates_mapping[col_idx] = int(val.split('-')[0])
 
     ahora = datetime.datetime.now(TZ)
-    h_proxima = (ahora.hour + 1) % 24
     dia_hoy = ahora.day
     
+    # --- LA MAGIA DE LA VENTANA DE TIEMPO ---
+    # Le sumamos 15 minutos al reloj del bot.
+    # Así, no importa si GitHub lo ejecuta al minuto :55, al :59 o al :04.
+    # Siempre apuntará a la hora correcta sin mandar duplicados.
+    hora_objetivo = (ahora + datetime.timedelta(minutes=15)).hour
+    
     turno_memoria = ""
-    agentes_notificar = []
-    nombre_turno = ""
+    agentes_por_turno = {}
 
     for row in all_values[2:]:
         if len(row) < 3: continue
@@ -63,21 +68,28 @@ def run_bot():
             
         if not turno_memoria: continue
         
+        # Hora de inicio de este turno
         h_ini = int(re.search(r'(\d+)', turno_memoria).group(1))
         
-        if h_ini == h_proxima:
+        # ¿La hora de inicio de este turno coincide con nuestra hora objetivo?
+        if h_ini == hora_objetivo:
             for col_idx, d_num in dates_mapping.items():
                 if d_num == dia_hoy and col_idx < len(row):
                     nombre_agente = str(row[col_idx]).strip()
-                    if len(nombre_agente) > 1 and nombre_agente.lower() not in ['f','franco','vac','lic','martes','lunes','miercoles','jueves','viernes','sabado','domingo', 'agente', 'mañana/tarde', 'tarde/noche'] and not nombre_agente.isdigit():
-                        agentes_notificar.append(nombre_agente)
-                        nombre_turno = turno_memoria
+                    # Filtro anti-basura riguroso
+                    if len(nombre_agente) > 1 and nombre_agente.lower() not in ['f','franco','vac','lic','martes','lunes','miercoles','jueves','viernes','sabado','domingo', 'agente', 'mañana/tarde', 'tarde/noche'] and not nombre_agente.isdigit() and not re.match(r'^\d{2}-\d{2}$', nombre_agente):
+                        
+                        if turno_memoria not in agentes_por_turno:
+                            agentes_por_turno[turno_memoria] = []
+                        agentes_por_turno[turno_memoria].append(nombre_agente)
     
-    if agentes_notificar:
-        notify_slack(agentes_notificar, nombre_turno, webhook)
-        print(f"Éxito: Notificación enviada para {agentes_notificar}")
+    # Enviar notificaciones por cada turno agrupado
+    if agentes_por_turno:
+        for turno, lista in agentes_por_turno.items():
+            notify_slack(lista, turno, webhook)
+            print(f"Éxito: {turno} - {lista}")
     else:
-        print("Operación terminada: No hay ingresos en la próxima hora.")
+        print(f"Sin ingresos para la hora {hora_objetivo}:00")
 
 if __name__ == "__main__":
     run_bot()
