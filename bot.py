@@ -43,10 +43,7 @@ def run_bot():
     dia_hoy = ahora.day
     
     # --- LA MAGIA DE LA VENTANA DE TIEMPO ---
-    # Le sumamos 15 minutos al reloj del bot.
-    # Así, no importa si GitHub lo ejecuta al minuto :55, al :59 o al :04.
-    # Siempre apuntará a la hora correcta sin mandar duplicados.
-   hora_objetivo = (ahora + datetime.timedelta(minutes=25)).hour
+    hora_objetivo = (ahora + datetime.timedelta(minutes=25)).hour
     
     turno_memoria = ""
     agentes_por_turno = {}
