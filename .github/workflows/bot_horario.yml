@@ -1,7 +1,7 @@
 name: WFM Slack Bot
 on:
   schedule:
-    - cron: '55 * * * *'
+    - cron: '45 * * * *'  # <-- Ahora se activará a las y 45 de cada hora
   workflow_dispatch:
 
 jobs:
