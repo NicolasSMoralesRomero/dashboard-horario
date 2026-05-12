@@ -9,29 +9,24 @@ import re
 # --- CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(page_title="WFM Dashboard", page_icon="⏱️", layout="wide")
 
-# Zona horaria local (Ajusta según tu país, ej: 'America/Argentina/Buenos_Aires')
 TZ = pytz.timezone('America/Argentina/Buenos_Aires')
 
 # --- CONEXIÓN A GOOGLE SHEETS ---
 @st.cache_resource
 def get_gspread_client():
-    """Autentica y devuelve el cliente de gspread usando st.secrets."""
     scopes = [
         "https://www.googleapis.com/auth/spreadsheets.readonly",
         "https://www.googleapis.com/auth/drive.readonly"
     ]
-    # Extraer credenciales del secrets.toml
     creds_dict = st.secrets["gcp_service_account"]
     creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
     return gspread.authorize(creds)
 
-@st.cache_data(ttl=600) # TTL de 10 minutos para frescura vs cuota API
+@st.cache_data(ttl=600)
 def load_wfm_data(sheet_url):
-    """Descarga y procesa la matriz visual de Google Sheets a un formato estructurado."""
     client = get_gspread_client()
     try:
         sheet = client.open_by_url(sheet_url).worksheet("Calendario")
-        # Traer todo de una vez (minimiza llamadas a la API)
         all_values = sheet.get_all_values()
     except Exception as e:
         st.error(f"Error al conectar con Google Sheets: {e}")
@@ -40,60 +35,75 @@ def load_wfm_data(sheet_url):
     if len(all_values) < 3:
         return pd.DataFrame()
 
-    # Fila 3 (índice 2) contiene los días del mes (1, 2, 3...)
-    days_row = all_values[2]
-    
-    # Extraemos filas de datos (de la 4 en adelante)
-    data_rows = all_values[3:]
-    
+    # Mapear en qué columna está cada día (Leyendo la Fila 2, índice 1)
+    # Buscamos patrones como "01-05", "02-05" a partir de la Columna D (índice 3)
+    dates_mapping = {}
+    fila_fechas = all_values[1] 
+    for col_idx in range(3, len(fila_fechas)):
+        val = str(fila_fechas[col_idx]).strip()
+        if re.match(r'\d{2}-\d{2}', val):
+            dia = int(val.split('-')[0]) # Extrae el '01' y lo convierte a 1
+            dates_mapping[col_idx] = dia
+            
     parsed_data = []
+    turno_actual_memoria = "" # Para manejar las celdas combinadas de la Columna B
     
-    for row in data_rows:
-        # Validar longitud mínima de fila
+    # Iterar desde la fila 3 (índice 2) en adelante
+    for row_idx in range(2, len(all_values)):
+        row = all_values[row_idx]
+        
+        # Ignorar filas demasiado cortas
         if len(row) < 3:
             continue
             
-        rango_turno = str(row[0]).strip()
-        agente = str(row[1]).strip()
+        col_b_turno = str(row[1]).strip()
+        col_c_agente = str(row[2]).strip()
         
-        # Filtro 1: Ignorar filas vacías o títulos (MAÑANA, TARDE)
-        # Usamos regex para buscar el patrón "numero a numero"
-        match = re.match(r'(\d+)\s*a\s*(\d+)', rango_turno.lower())
-        if not match or not agente:
+        # Si la celda de turno tiene texto (ej. "de 9 a 16"), actualizamos la memoria.
+        # Si está vacía (por celda combinada), usamos el que quedó guardado.
+        if "a" in col_b_turno and re.search(r'\d+', col_b_turno):
+            turno_actual_memoria = col_b_turno
+            
+        # Ignorar filas de encabezados intermedios, vacías, o filas de totales
+        if not col_c_agente or col_c_agente.isdigit() or col_c_agente.lower() in ["viernes", "sabado", "domingo", "lunes", "martes", "miercoles", "jueves"]:
+            continue
+            
+        if not turno_actual_memoria:
+            continue
+            
+        # Extraer las horas (Ej: de "de 14 a 21" extrae 14 y 21)
+        match = re.search(r'(\d+)\s*a\s*(\d+)', turno_actual_memoria.lower())
+        if not match:
             continue
             
         hora_inicio = int(match.group(1))
         hora_fin = int(match.group(2))
-        
-        # Lógica para turnos que cruzan la medianoche
         cruza_medianoche = hora_fin <= hora_inicio
         
-        # Construir diccionario para este agente
         agente_data = {
-            "Turno": rango_turno,
-            "Agente": agente,
+            "Turno": turno_actual_memoria,
+            "Agente": col_c_agente,
             "Hora_Inicio": hora_inicio,
             "Hora_Fin": hora_fin,
             "Cruza_Medianoche": cruza_medianoche
         }
         
-        # Mapear los días laborables (Columna C en adelante, índice 2+)
-        for col_idx in range(2, len(row)):
-            if col_idx < len(days_row):
-                dia_str = str(days_row[col_idx]).strip()
-                if dia_str.isdigit():
-                    dia_num = int(dia_str)
-                    celda_valor = str(row[col_idx]).strip()
-                    # Condición: si el valor contiene el nombre u otra marca de presencia
-                    trabaja = len(celda_valor) > 1 and celda_valor.lower() != "f" 
-                    agente_data[f"Dia_{dia_num}"] = trabaja
-                    
+        # Buscar la asistencia en las columnas mapeadas
+        for col_idx, day_num in dates_mapping.items():
+            if col_idx < len(row):
+                celda_valor = str(row[col_idx]).strip()
+                # Condición: si hay texto largo (el nombre) o colores, asume que trabaja.
+                # "f" o celdas vacías indican franco.
+                trabaja = len(celda_valor) > 1 and celda_valor.lower() != "f"
+                agente_data[f"Dia_{day_num}"] = trabaja
+            else:
+                agente_data[f"Dia_{day_num}"] = False
+                
         parsed_data.append(agente_data)
         
     return pd.DataFrame(parsed_data)
 
 def get_status_agente(hora_inicio, hora_fin, cruza_medianoche, hora_actual):
-    """Determina si un agente está actualmente en turno o si entra en la próxima banda."""
     en_turno = False
     proximo = False
     
@@ -110,11 +120,9 @@ def get_status_agente(hora_inicio, hora_fin, cruza_medianoche, hora_actual):
             
     return en_turno, proximo
 
-# --- UI Y LÓGICA DE LA APLICACIÓN ---
 def main():
     st.title("📊 Dashboard WFM - Control de Turnos")
     
-    # Intenta obtener la URL desde st.secrets
     try:
         SHEET_URL = st.secrets["SHEET_URL"]
     except KeyError:
@@ -124,6 +132,7 @@ def main():
     df = load_wfm_data(SHEET_URL)
     
     if df.empty:
+        st.info("No se pudieron cargar datos. Verifica el formato del Sheet.")
         st.stop()
 
     # --- SIDEBAR ---
@@ -134,10 +143,10 @@ def main():
     
     col_dia = f"Dia_{dia_seleccionado}"
     if col_dia not in df.columns:
-        st.sidebar.error(f"El día {dia_seleccionado} no se encuentra en el calendario o no hay datos cargados.")
+        st.sidebar.warning(f"No hay datos cargados para el día {dia_seleccionado} en este mes.")
         return
 
-    # Filtrar solo agentes que trabajan el día seleccionado
+    # Filtrar dotación del día
     df_dia = df[df[col_dia] == True].copy()
 
     # --- TIEMPO ACTUAL ---
@@ -146,7 +155,6 @@ def main():
     
     st.markdown(f"### 🕒 Estado Actual: `{ahora.strftime('%H:%M')} hrs` - {fecha_seleccionada.strftime('%d/%m/%Y')}")
 
-    # Lógica de cálculo de estado
     df_dia['En_Turno'] = False
     df_dia['Proximo'] = False
     
@@ -157,7 +165,7 @@ def main():
         df_dia.at[idx, 'En_Turno'] = en_turno
         df_dia.at[idx, 'Proximo'] = proximo
 
-    # --- SECCIÓN 1 Y 2: ACTUALES Y PRÓXIMOS ---
+    # --- SECCIONES ---
     col1, col2 = st.columns(2)
     
     with col1:
@@ -178,18 +186,20 @@ def main():
 
     st.markdown("---")
 
-    # --- SECCIÓN 3: RESUMEN DEL DÍA ---
-    st.subheader(f"📈 Resumen de Dotación: {fecha_seleccionada.strftime('%d/%m/%Y')}")
+    st.subheader(f"📈 Resumen de Dotación Programada ({fecha_seleccionada.strftime('%d/%m/%Y')})")
     
-    resumen = df_dia.groupby('Turno').size().reset_index(name='Agentes Programados')
-    resumen['Hora_Orden'] = resumen['Turno'].apply(lambda x: int(re.match(r'(\d+)', x).group(1)) if re.match(r'(\d+)', x) else 0)
-    resumen = resumen.sort_values('Hora_Orden').drop(columns=['Hora_Orden']).reset_index(drop=True)
+    if not df_dia.empty:
+        resumen = df_dia.groupby('Turno').size().reset_index(name='Agentes Programados')
+        resumen['Hora_Orden'] = resumen['Turno'].apply(lambda x: int(re.match(r'(\d+)', x).group(1)) if re.search(r'(\d+)', x) else 0)
+        resumen = resumen.sort_values('Hora_Orden').drop(columns=['Hora_Orden']).reset_index(drop=True)
 
-    col3, col4 = st.columns([2, 1])
-    with col3:
-        st.dataframe(resumen, use_container_width=True, hide_index=True)
-    with col4:
-        st.metric(label="Total de Agentes (Día)", value=resumen['Agentes Programados'].sum())
+        col3, col4 = st.columns([2, 1])
+        with col3:
+            st.dataframe(resumen, use_container_width=True, hide_index=True)
+        with col4:
+            st.metric(label="Total de Agentes (Día)", value=resumen['Agentes Programados'].sum())
+    else:
+        st.info("No hay dotación programada para este día.")
 
 if __name__ == "__main__":
     main()
