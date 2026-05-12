@@ -58,10 +58,6 @@ def load_wfm_data(sheet_url):
         if "a" in col_b_turno and re.search(r'\d+', col_b_turno):
             turno_actual_memoria = col_b_turno
             
-        # Ignoramos solo las filas que son claramente encabezados de días
-        if col_c_agente_base.lower() in ["viernes", "sabado", "domingo", "lunes", "martes", "miercoles", "jueves", "agente"]:
-            continue
-            
         if not turno_actual_memoria:
             continue
             
@@ -81,10 +77,23 @@ def load_wfm_data(sheet_url):
             "Cruza_Medianoche": cruza_medianoche
         }
         
-        # AHORA GUARDAMOS EL TEXTO EXACTO DE LA CELDA, NO UN TRUE/FALSE
         for col_idx, day_num in dates_mapping.items():
             if col_idx < len(row):
-                agente_data[f"Dia_{day_num}"] = str(row[col_idx]).strip()
+                val = str(row[col_idx]).strip()
+                val_lower = val.lower()
+                
+                # --- FILTRO ANTI-BASURA ---
+                # Detecta días, fechas y números para no confundirlos con personas
+                es_basura = (
+                    val_lower in ["lunes", "martes", "miercoles", "jueves", "viernes", "sabado", "domingo", "agente"] or
+                    bool(re.match(r'^\d{2}-\d{2}$', val)) or
+                    val.isdigit()
+                )
+                
+                if es_basura:
+                    agente_data[f"Dia_{day_num}"] = ""
+                else:
+                    agente_data[f"Dia_{day_num}"] = val
             else:
                 agente_data[f"Dia_{day_num}"] = ""
                 
@@ -134,15 +143,13 @@ def main():
         st.sidebar.warning(f"No hay datos cargados para el día {dia_seleccionado} en este mes.")
         return
 
-    # --- EL GRAN TRUCO WFM ---
-    # 1. Filtramos las filas donde la celda del día tenga más de 1 letra y no sea un franco o licencia.
+    # 1. Filtramos vacíos y francos
     df_dia = df[
         (df[col_dia].astype(str).str.len() > 1) & 
         (~df[col_dia].astype(str).str.lower().isin(['f', 'franco', 'vac', 'vacaciones', 'licencia', 'ausente']))
     ].copy()
 
-    # 2. Reemplazamos el "Agente Base" por el nombre real que está escrito en la celda de ese día.
-    # Así capturamos horas extras, coberturas y dobles turnos a la perfección.
+    # 2. Asignamos el agente
     df_dia['Agente'] = df_dia[col_dia]
 
     ahora = datetime.datetime.now(TZ)
