@@ -190,7 +190,7 @@ def main():
     
     if not df_dia.empty:
         resumen = df_dia.groupby('Turno').size().reset_index(name='Agentes Programados')
-        resumen['Hora_Orden'] = resumen['Turno'].apply(lambda x: int(re.match(r'(\d+)', x).group(1)) if re.search(r'(\d+)', x) else 0)
+        resumen['Hora_Orden'] = resumen['Turno'].apply(lambda x: int(re.search(r'(\d+)', x).group(1)) if re.search(r'(\d+)', x) else 0)
         resumen = resumen.sort_values('Hora_Orden').drop(columns=['Hora_Orden']).reset_index(drop=True)
 
         col3, col4 = st.columns([2, 1])
