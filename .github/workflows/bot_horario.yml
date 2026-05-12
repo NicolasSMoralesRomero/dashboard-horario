@@ -1,23 +1,22 @@
 name: WFM Slack Bot
 on:
   schedule:
-    - cron: '55 * * * *' 
-  workflow_dispatch: 
+    - cron: '55 * * * *'
+  workflow_dispatch:
 
 jobs:
   run-bot:
     runs-on: ubuntu-latest
     steps:
-steps:
-      - name: Checkout del código
-        uses: actions/checkout@v4  # <-- Cambiado de v3 a v4
+      - name: Checkout del codigo
+        uses: actions/checkout@v4
 
       - name: Configurar Python
-        uses: actions/setup-python@v5  # <-- Cambiado de v4 a v5
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      - name: Instalar librerías
+      - name: Instalar librerias
         run: |
           pip install pandas gspread google-auth requests pytz
 
